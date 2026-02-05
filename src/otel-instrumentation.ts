@@ -170,37 +170,143 @@ export function traceMessageRoute(
 // Message Flow Tracing (for complete request lifecycle)
 // ============================================================================
 
-const activeFlows = new Map<string, { span: api.Span; ctx: api.Context }>();
+interface ActiveFlow {
+  rootSpan: api.Span;
+  rootCtx: api.Context;
+  traceparent: string;
+  channel: string;
+  sessionId: string;
+  messageText?: string;
+}
+
+const activeFlows = new Map<string, ActiveFlow>();
+
+function makeTraceparent(sc: api.SpanContext): string {
+  const version = "00";
+  const traceId = sc.traceId;
+  const spanId = sc.spanId;
+  const flags = (sc.traceFlags ?? api.TraceFlags.SAMPLED).toString(16).padStart(2, "0");
+  return `${version}-${traceId}-${spanId}-${flags}`;
+}
 
 /**
- * Start tracing a message flow (call at the beginning of message handling)
+ * Start tracing a message flow (call at the beginning of message handling).
+ * Creates only the root span; the message.flow span is created inside withFlowContext
+ * so it stays active for the whole async dispatch (ensuring HTTP client spans share the trace).
  */
 export function startMessageFlow(
   sessionId: string,
   channel: string,
   messageText?: string,
-): { span: api.Span; context: api.Context } {
-  const span = getTracer().startSpan("message.flow", {
+): { traceparent: string } {
+  const tracer = getTracer();
+
+  const rootSpan = tracer.startSpan("session.root", {
     kind: SpanKind.SERVER,
     attributes: {
       "openclaw.session_id": sessionId,
       "openclaw.channel": channel,
-      "openclaw.message.length": messageText?.length ?? 0,
-      "openclaw.flow.start_time": new Date().toISOString(),
-      "openclaw.component": "auto-reply",
-      // Capture incoming message
-      "openclaw.message.request": messageText ? safeStringify(messageText) : "",
+      "openclaw.component": "session",
     },
   });
+  const rootCtx = trace.setSpan(context.active(), rootSpan);
+  const traceparent = makeTraceparent(rootSpan.spanContext());
 
-  const ctx = trace.setSpan(context.active(), span);
-  activeFlows.set(sessionId, { span, ctx });
+  activeFlows.set(sessionId, {
+    rootSpan,
+    rootCtx,
+    traceparent,
+    channel,
+    sessionId,
+    messageText,
+  });
 
-  return { span, context: ctx };
+  return { traceparent };
 }
 
 /**
- * Add a step to the current message flow
+ * End-flow callback passed to withFlowContext. Call once when the flow is done.
+ */
+export type EndFlowFn = (opts?: {
+  success?: boolean;
+  responseText?: string;
+  errorMessage?: string;
+}) => void;
+
+/**
+ * Execute the dispatch inside an active message.flow span so all downstream work
+ * (LLM HTTP, Slack HTTP, etc.) runs in the same trace. Runs inside the session root
+ * context so message.flow is a child of session.root; startActiveSpan then sets
+ * message.flow as the active span for the callback so instrumentations (e.g. undici)
+ * attach HTTP spans to this trace.
+ */
+export async function withFlowContext<T>(
+  sessionId: string,
+  fn: (endFlow: EndFlowFn) => Promise<T>,
+): Promise<T> {
+  const flow = activeFlows.get(sessionId);
+  if (!flow) {
+    return fn(() => {});
+  }
+
+  const tracer = getTracer();
+
+  // Run inside root context so the message.flow span is created with session.root as parent.
+  return context.with(flow.rootCtx, () =>
+    tracer.startActiveSpan(
+      "message.flow",
+      {
+        kind: SpanKind.SERVER,
+        attributes: {
+          "openclaw.session_id": flow.sessionId,
+          "openclaw.channel": flow.channel,
+          "openclaw.message.length": flow.messageText?.length ?? 0,
+          "openclaw.flow.start_time": new Date().toISOString(),
+          "openclaw.component": "auto-reply",
+          "openclaw.message.request": flow.messageText ? safeStringify(flow.messageText) : "",
+        },
+      },
+      context.active(),
+      async (span) => {
+        let flowSpanEnded = false;
+        const endFlow: EndFlowFn = (opts = {}) => {
+          if (flowSpanEnded) return;
+          flowSpanEnded = true;
+          span.setAttribute("openclaw.flow.success", opts.success ?? true);
+          span.setAttribute("openclaw.flow.end_time", new Date().toISOString());
+          if (opts.responseText != null) {
+            span.setAttribute("openclaw.message.response", safeStringify(opts.responseText));
+          }
+          if (opts.success === false && opts.errorMessage != null) {
+            span.setStatus({ code: SpanStatusCode.ERROR, message: opts.errorMessage });
+          } else {
+            span.setStatus({ code: SpanStatusCode.OK });
+          }
+          span.end();
+        };
+        try {
+          const result = await fn(endFlow);
+          if (!flowSpanEnded) endFlow({ success: true });
+          return result;
+        } catch (err) {
+          if (!flowSpanEnded) {
+            endFlow({
+              success: false,
+              errorMessage: err instanceof Error ? err.message : String(err),
+            });
+          }
+          throw err;
+        } finally {
+          flow.rootSpan.end();
+          activeFlows.delete(sessionId);
+        }
+      },
+    ),
+  );
+}
+
+/**
+ * Add a step to the current message flow (optional; requires active flow from withFlowContext).
  */
 export function addFlowStep(
   sessionId: string,
@@ -208,70 +314,27 @@ export function addFlowStep(
   attributes: Record<string, string | number | boolean> = {},
 ): api.Span | null {
   const flow = activeFlows.get(sessionId);
-  if (!flow) {
-    return null;
-  }
+  if (!flow) return null;
 
-  return context.with(flow.ctx, () => {
+  return context.with(flow.rootCtx, () => {
     const span = getTracer().startSpan(`flow.${stepName}`, {
       kind: SpanKind.INTERNAL,
-      attributes: {
-        "openclaw.session_id": sessionId,
-        ...attributes,
-      },
+      attributes: { "openclaw.session_id": sessionId, ...attributes },
     });
     return span;
   });
 }
 
 /**
- * End the message flow
+ * End the message flow (no-op when using withFlowContext; kept for compatibility.)
  */
 export function endMessageFlow(
-  sessionId: string,
-  success = true,
-  responseText?: string,
-  errorMessage?: string,
+  _sessionId: string,
+  _success = true,
+  _responseText?: string,
+  _errorMessage?: string,
 ): void {
-  const flow = activeFlows.get(sessionId);
-  if (!flow) {
-    return;
-  }
-
-  flow.span.setAttribute("openclaw.flow.success", success);
-  flow.span.setAttribute("openclaw.flow.end_time", new Date().toISOString());
-
-  // Capture outgoing response
-  if (responseText) {
-    flow.span.setAttribute("openclaw.message.response", safeStringify(responseText));
-  }
-
-  if (success) {
-    flow.span.setStatus({ code: SpanStatusCode.OK });
-  } else {
-    flow.span.setStatus({
-      code: SpanStatusCode.ERROR,
-      message: errorMessage,
-    });
-  }
-
-  flow.span.end();
-  activeFlows.delete(sessionId);
-}
-
-// ============================================================================
-// Convenience: Run function within a flow context
-// ============================================================================
-
-/**
- * Execute a function within the context of a message flow
- */
-export async function withFlowContext<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
-  const flow = activeFlows.get(sessionId);
-  if (!flow) {
-    return fn();
-  }
-  return context.with(flow.ctx, fn);
+  // Flow and root span are ended inside withFlowContext / endFlow.
 }
 
 // ============================================================================

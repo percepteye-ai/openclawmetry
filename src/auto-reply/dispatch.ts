@@ -11,7 +11,7 @@ import {
   type ReplyDispatcherOptions,
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
-import { startMessageFlow, endMessageFlow } from "../otel-instrumentation.js";
+import { startMessageFlow, withFlowContext } from "../otel-instrumentation.js";
 
 export type DispatchInboundResult = DispatchFromConfigResult;
 
@@ -26,23 +26,30 @@ export async function dispatchInboundMessage(params: {
   const sessionId = finalized.SessionKey ?? finalized.SenderId ?? "unknown";
   const channel = finalized.Provider ?? finalized.Surface ?? "unknown";
 
-  // Start OpenTelemetry message flow trace
+  // Start OpenTelemetry message flow trace (one trace per chat session).
   startMessageFlow(sessionId, channel, finalized.Body);
 
-  try {
-    const result = await dispatchReplyFromConfig({
-      ctx: finalized,
-      cfg: params.cfg,
-      dispatcher: params.dispatcher,
-      replyOptions: params.replyOptions,
-      replyResolver: params.replyResolver,
-    });
-    endMessageFlow(sessionId, true);
-    return result;
-  } catch (error) {
-    endMessageFlow(sessionId, false, error instanceof Error ? error.message : String(error));
-    throw error;
-  }
+  // Run the whole dispatch inside an active message.flow span so LLM/tool HTTP spans
+  // share the same trace (traceparent is propagated in request headers by instrumentation).
+  return withFlowContext(sessionId, async (endFlow) => {
+    try {
+      const result = await dispatchReplyFromConfig({
+        ctx: finalized,
+        cfg: params.cfg,
+        dispatcher: params.dispatcher,
+        replyOptions: params.replyOptions,
+        replyResolver: params.replyResolver,
+      });
+      endFlow({ success: true });
+      return result;
+    } catch (error) {
+      endFlow({
+        success: false,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  });
 }
 
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {

@@ -18,4 +18,10 @@ services:
       - COLLECTOR_OTLP_ENABLED=true
       # Use in-memory storage (no size limits)
       - SPAN_STORAGE_TYPE=memory
+      # Enable Jaeger UI themes (includes dark mode toggle)
+      # See: https://www.jaegertracing.io/docs/deployment/frontend-ui/
+    volumes:
+      - ./jaeger-ui-config.json:/etc/jaeger/ui-config.json:ro
+    command:
+      - "--query.ui-config=/etc/jaeger/ui-config.json"
     restart: unless-stopped
