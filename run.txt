@@ -1,0 +1,2 @@
+pnpm run gateway:dev:otel
+pnpm ui:dev
