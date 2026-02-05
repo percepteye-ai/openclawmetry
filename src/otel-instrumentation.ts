@@ -3,9 +3,30 @@
 // This file patches key functions to add custom spans
 
 import api from "@opentelemetry/api";
+import { getSharedTracer } from "./otel-tracer.js";
 
 const { trace, SpanKind, SpanStatusCode, context } = api;
-const tracer = trace.getTracer("openclaw-agent", "1.0.0");
+
+// Use the shared tracer injected by otel-setup.js
+function getTracer(): api.Tracer {
+  try {
+    return getSharedTracer();
+  } catch (error) {
+    console.error("[OTEL] Failed to get shared tracer:", error);
+    // Fallback to API (will likely not work but prevents crash)
+    return trace.getTracer("openclaw-agent-fallback", "1.0.0");
+  }
+}
+
+// Helper to safely stringify payloads for span attributes
+function safeStringify(value: any, maxLength = 10000): string {
+  try {
+    const str = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    return str.length > maxLength ? str.slice(0, maxLength) + "...[truncated]" : str;
+  } catch {
+    return "[unable to stringify]";
+  }
+}
 
 // ============================================================================
 // LLM Call Tracing
@@ -17,29 +38,30 @@ const tracer = trace.getTracer("openclaw-agent", "1.0.0");
 export function traceLLMCall<T extends (...args: any[]) => Promise<any>>(
   provider: string,
   model: string,
-  fn: T
+  fn: T,
 ): T {
   return (async (...args: Parameters<T>) => {
-    const span = tracer.startSpan("llm.completion", {
+    const span = getTracer().startSpan("llm.completion", {
       kind: SpanKind.CLIENT,
       attributes: {
         "gen_ai.system": provider,
         "gen_ai.request.model": model,
         "openclaw.component": "pi-embedded-runner",
+        // Capture request payload
+        "gen_ai.request.payload": safeStringify(args),
       },
     });
 
     const startTime = Date.now();
 
     try {
-      const result = await context.with(
-        trace.setSpan(context.active(), span),
-        () => fn(...args)
-      );
+      const result = await context.with(trace.setSpan(context.active(), span), () => fn(...args));
 
       span.setAttributes({
         "openclaw.llm.duration_ms": Date.now() - startTime,
         "openclaw.llm.success": true,
+        // Capture response payload
+        "gen_ai.response.payload": safeStringify(result),
       });
       span.setStatus({ code: SpanStatusCode.OK });
 
@@ -70,29 +92,30 @@ export function traceLLMCall<T extends (...args: any[]) => Promise<any>>(
  */
 export function traceToolExecution<T extends (...args: any[]) => Promise<any>>(
   toolName: string,
-  fn: T
+  fn: T,
 ): T {
   return (async (...args: Parameters<T>) => {
-    const span = tracer.startSpan(`tool.${toolName}`, {
+    const span = getTracer().startSpan(`tool.${toolName}`, {
       kind: SpanKind.INTERNAL,
       attributes: {
         "openclaw.tool.name": toolName,
         "openclaw.tool.args_count": args.length,
         "openclaw.component": "tools",
+        // Capture request payload
+        "openclaw.tool.request": safeStringify(args),
       },
     });
 
     const startTime = Date.now();
 
     try {
-      const result = await context.with(
-        trace.setSpan(context.active(), span),
-        () => fn(...args)
-      );
+      const result = await context.with(trace.setSpan(context.active(), span), () => fn(...args));
 
       span.setAttributes({
         "openclaw.tool.duration_ms": Date.now() - startTime,
         "openclaw.tool.success": true,
+        // Capture response payload
+        "openclaw.tool.response": safeStringify(result),
       });
       span.setStatus({ code: SpanStatusCode.OK });
 
@@ -125,9 +148,9 @@ export function traceMessageRoute(
   channel: string,
   sessionKey: string,
   agentId: string,
-  matchedBy: string
+  matchedBy: string,
 ) {
-  const span = tracer.startSpan("message.route", {
+  const span = getTracer().startSpan("message.route", {
     kind: SpanKind.INTERNAL,
     attributes: {
       "openclaw.channel": channel,
@@ -155,16 +178,18 @@ const activeFlows = new Map<string, { span: api.Span; ctx: api.Context }>();
 export function startMessageFlow(
   sessionId: string,
   channel: string,
-  messageLength?: number
+  messageText?: string,
 ): { span: api.Span; context: api.Context } {
-  const span = tracer.startSpan("message.flow", {
+  const span = getTracer().startSpan("message.flow", {
     kind: SpanKind.SERVER,
     attributes: {
       "openclaw.session_id": sessionId,
       "openclaw.channel": channel,
-      "openclaw.message.length": messageLength ?? 0,
+      "openclaw.message.length": messageText?.length ?? 0,
       "openclaw.flow.start_time": new Date().toISOString(),
       "openclaw.component": "auto-reply",
+      // Capture incoming message
+      "openclaw.message.request": messageText ? safeStringify(messageText) : "",
     },
   });
 
@@ -180,7 +205,7 @@ export function startMessageFlow(
 export function addFlowStep(
   sessionId: string,
   stepName: string,
-  attributes: Record<string, string | number | boolean> = {}
+  attributes: Record<string, string | number | boolean> = {},
 ): api.Span | null {
   const flow = activeFlows.get(sessionId);
   if (!flow) {
@@ -188,7 +213,7 @@ export function addFlowStep(
   }
 
   return context.with(flow.ctx, () => {
-    const span = tracer.startSpan(`flow.${stepName}`, {
+    const span = getTracer().startSpan(`flow.${stepName}`, {
       kind: SpanKind.INTERNAL,
       attributes: {
         "openclaw.session_id": sessionId,
@@ -205,13 +230,21 @@ export function addFlowStep(
 export function endMessageFlow(
   sessionId: string,
   success = true,
-  errorMessage?: string
+  responseText?: string,
+  errorMessage?: string,
 ): void {
   const flow = activeFlows.get(sessionId);
-  if (!flow) return;
+  if (!flow) {
+    return;
+  }
 
   flow.span.setAttribute("openclaw.flow.success", success);
   flow.span.setAttribute("openclaw.flow.end_time", new Date().toISOString());
+
+  // Capture outgoing response
+  if (responseText) {
+    flow.span.setAttribute("openclaw.message.response", safeStringify(responseText));
+  }
 
   if (success) {
     flow.span.setStatus({ code: SpanStatusCode.OK });
@@ -233,10 +266,7 @@ export function endMessageFlow(
 /**
  * Execute a function within the context of a message flow
  */
-export async function withFlowContext<T>(
-  sessionId: string,
-  fn: () => Promise<T>
-): Promise<T> {
+export async function withFlowContext<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
   const flow = activeFlows.get(sessionId);
   if (!flow) {
     return fn();
@@ -248,4 +278,4 @@ export async function withFlowContext<T>(
 // Export tracer for direct use
 // ============================================================================
 
-export { tracer };
+export { getTracer as tracer };
