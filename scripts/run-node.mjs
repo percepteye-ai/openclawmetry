@@ -109,7 +109,9 @@ const logRunner = (message) => {
 };
 
 const runNode = () => {
-  const nodeProcess = spawn(process.execPath, ["openclaw.mjs", ...args], {
+  // Pass --import flag to child process so otel-setup.js loads there too
+  const nodeArgs = ["--import", "./otel-setup.js", "openclaw.mjs", ...args];
+  const nodeProcess = spawn(process.execPath, nodeArgs, {
     cwd,
     env,
     stdio: "inherit",

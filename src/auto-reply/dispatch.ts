@@ -25,10 +25,9 @@ export async function dispatchInboundMessage(params: {
   const finalized = finalizeInboundContext(params.ctx);
   const sessionId = finalized.SessionKey ?? finalized.SenderId ?? "unknown";
   const channel = finalized.Provider ?? finalized.Surface ?? "unknown";
-  const messageLength = finalized.Body?.length ?? 0;
 
   // Start OpenTelemetry message flow trace
-  startMessageFlow(sessionId, channel, messageLength);
+  startMessageFlow(sessionId, channel, finalized.Body);
 
   try {
     const result = await dispatchReplyFromConfig({
