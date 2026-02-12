@@ -10,12 +10,12 @@ Usage:
   pip install -r requirements.txt
   python bridge_server.py [--port 8765]
 
-Then set in OpenClaw config (e.g. ~/.openclaw/config.json):
+Then set in OpenClaw config (e.g. ~/.openclaw/openclaw.json):
   "gateway": {
-    "port": 18789,
+    "port": 19001,
     "agl": {
       "bridgeUrl": "http://127.0.0.1:8765",
-      "internalAgentRunSecret": "your-secret"
+      "internalAgentRunSecret": "pick-a-secret-stringt"
     }
   }
 """
@@ -94,15 +94,22 @@ async def handle_chat(request: web.Request) -> web.Response:
             status=400,
         )
     response_ref: list[str] = []
+    idem = idempotency_key or f"bridge-{id(body)}"
+    # Nested input for _response_ref; top-level keys so agent can read when AGL overwrites task.input
     task_input = {
         "input": {
             "gatewayBaseUrl": gateway_base_url,
             "internalSecret": internal_secret,
             "sessionKey": session_key,
             "message": message,
-            "idempotencyKey": idempotency_key or f"bridge-{id(body)}",
+            "idempotencyKey": idem,
             "_response_ref": response_ref,
         },
+        "gatewayBaseUrl": gateway_base_url,
+        "internalSecret": internal_secret,
+        "sessionKey": session_key,
+        "message": message,
+        "idempotencyKey": idem,
     }
     try:
         runner = await _ensure_runner()

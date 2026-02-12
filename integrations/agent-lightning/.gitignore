@@ -1,5 +1,6 @@
-# Python bytecode
+# Python bytecode and local data
 **/.venv**
+prompts.txt
 **/__pycache__/
 **/*.pyc
 **/*.pyo
