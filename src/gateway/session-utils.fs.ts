@@ -93,9 +93,15 @@ export function capArrayByJsonBytes<T>(
 
 const MAX_LINES_TO_SCAN = 10;
 
+type TranscriptContentPart = {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  name?: string;
+};
 type TranscriptMessage = {
   role?: string;
-  content?: string | Array<{ type: string; text?: string }>;
+  content?: string | TranscriptContentPart[];
 };
 
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
@@ -109,7 +115,11 @@ function extractTextFromContent(content: TranscriptMessage["content"]): string |
     if (!part || typeof part.text !== "string") {
       continue;
     }
-    if (part.type === "text" || part.type === "output_text" || part.type === "input_text") {
+    const rawType =
+      typeof (part as TranscriptContentPart).type === "string"
+        ? (part as TranscriptContentPart).type
+        : "";
+    if (rawType === "text" || rawType === "output_text" || rawType === "input_text") {
       const trimmed = part.text.trim();
       if (trimmed) {
         return trimmed;
@@ -117,6 +127,124 @@ function extractTextFromContent(content: TranscriptMessage["content"]): string |
     }
   }
   return null;
+}
+
+function extractThinkingFromContent(content: TranscriptMessage["content"]): string | null {
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const parts: string[] = [];
+  for (const part of content) {
+    const p = part as TranscriptContentPart;
+    if (!p || typeof p.thinking !== "string") {
+      continue;
+    }
+    const rawType = typeof p.type === "string" ? p.type : "";
+    if (rawType === "thinking") {
+      const trimmed = p.thinking.trim();
+      if (trimmed) {
+        parts.push(trimmed);
+      }
+    }
+  }
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+function contentHasToolUse(content: TranscriptMessage["content"]): boolean {
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  for (const part of content) {
+    const p = part as TranscriptContentPart;
+    if (!p || typeof p.type !== "string") {
+      continue;
+    }
+    const t = p.type.toLowerCase();
+    if (t === "tool_use" || t === "toolcall" || t === "tool_call") {
+      return true;
+    }
+    if (typeof p.name === "string" && p.name.trim()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function extractToolNamesFromContent(content: TranscriptMessage["content"]): string[] {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const names: string[] = [];
+  for (const part of content) {
+    const p = part as TranscriptContentPart;
+    if (!p) {
+      continue;
+    }
+    const rawType = typeof p.type === "string" ? p.type.toLowerCase() : "";
+    const isTool = rawType === "tool_use" || rawType === "toolcall" || rawType === "tool_call";
+    if (isTool && typeof p.name === "string" && p.name.trim()) {
+      names.push(p.name.trim());
+    }
+  }
+  return names;
+}
+
+/**
+ * Build a single content string for assistant messages: thinking + text + tool_use suffix
+ * so the full LLM turn (thinking, visible text, and tool calls) is preserved in traces.
+ */
+function buildAssistantContent(msg: TranscriptMessage): string | null {
+  const thinking = extractThinkingFromContent(msg.content);
+  const text = extractTextFromContent(msg.content);
+  const toolNames = extractToolNamesFromContent(msg.content);
+  const parts: string[] = [];
+  if (thinking && thinking.trim()) {
+    parts.push(thinking.trim());
+  }
+  if (text && text.trim()) {
+    parts.push(text.trim());
+  }
+  if (toolNames.length > 0) {
+    parts.push(`[tool_use: ${toolNames.join(", ")}]`);
+  }
+  if (parts.length === 0) {
+    return contentHasToolUse(msg.content) ? "[tool call]" : null;
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * Convert raw transcript messages (from readSessionMessages) to OpenAI-style
+ * { role, content }[]. For assistant messages, content includes thinking + text + tool_use
+ * so traces capture the full LLM turn (not just visible text).
+ */
+export function transcriptToOpenAIMessages(
+  rawMessages: unknown[],
+  maxJsonBytes?: number,
+): { role: string; content: string }[] {
+  const out: { role: string; content: string }[] = [];
+  for (const raw of rawMessages) {
+    const msg = raw as TranscriptMessage | undefined;
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg.role && String(msg.role).trim()) || "user";
+    let content: string | null;
+    if (role === "assistant") {
+      content = buildAssistantContent(msg);
+    } else {
+      content = extractTextFromContent(msg.content);
+    }
+    if (content == null || content === "") {
+      continue;
+    }
+    out.push({ role, content });
+  }
+  if (maxJsonBytes != null && maxJsonBytes > 0) {
+    const { items } = capArrayByJsonBytes(out, maxJsonBytes);
+    return items;
+  }
+  return out;
 }
 
 export function readFirstUserMessageFromTranscript(

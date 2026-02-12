@@ -41,6 +41,7 @@ export {
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
   resolveSessionTranscriptCandidates,
+  transcriptToOpenAIMessages,
 } from "./session-utils.fs.js";
 export type {
   GatewayAgentRow,
@@ -701,7 +702,11 @@ export function listSessionsFromStore(params: {
         }
       }
     }
-    return { ...rest, derivedTitle, lastMessagePreview } satisfies GatewaySessionRow;
+    return {
+      ...rest,
+      derivedTitle,
+      lastMessagePreview,
+    } satisfies GatewaySessionRow;
   });
 
   return {

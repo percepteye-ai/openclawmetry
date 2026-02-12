@@ -12,7 +12,11 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { loadConfig } from "../../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { readJsonBody } from "../hooks.js";
-import { loadSessionEntry } from "../session-utils.js";
+import {
+  loadSessionEntry,
+  readSessionMessages,
+  transcriptToOpenAIMessages,
+} from "../session-utils.js";
 
 const INTERNAL_AGENT_RUN_PATH = "/_openclaw/internal/agent-run";
 const INTERNAL_SECRET_HEADER = "x-openclaw-internal-secret";
@@ -97,9 +101,12 @@ export async function handleInternalAgentRunRequest(
     return true;
   }
 
-  const { cfg: sessionCfg, entry } = loadSessionEntry(sessionKey);
+  const { cfg: sessionCfg, storePath, entry } = loadSessionEntry(sessionKey);
   const sessionId = entry?.sessionId ?? clientRunId;
   addChatRun(sessionId, { sessionKey, clientRunId });
+
+  const messagesBeforeRun = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+  const messageCountBeforeRun = messagesBeforeRun.length;
 
   const stampedMessage = injectTimestamp(message.trim(), timestampOptsFromConfig(sessionCfg));
   const ctx: MsgContext = {
@@ -166,6 +173,26 @@ export async function handleInternalAgentRunRequest(
     .join("\n\n")
     .trim();
 
-  sendJson(res, 200, { ok: true, responseText, runId: clientRunId });
+  let messages: { role: string; content: string }[] = [];
+  try {
+    const { storePath: storePathAfter, entry: latestEntry } = loadSessionEntry(sessionKey);
+    const latestSessionId = latestEntry?.sessionId ?? sessionId;
+    const messagesAfterRun = readSessionMessages(
+      latestSessionId,
+      storePathAfter,
+      latestEntry?.sessionFile,
+    );
+    const delta = messagesAfterRun.slice(messageCountBeforeRun);
+    messages = transcriptToOpenAIMessages(delta);
+  } catch {
+    /* non-fatal */
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    responseText,
+    runId: clientRunId,
+    messages,
+  });
   return true;
 }
