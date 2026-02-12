@@ -11,7 +11,7 @@ export class BodyInjectingExporter {
     spans.forEach(span => {
       const attributes = span.attributes || {};
       const url = attributes['url.full'] || attributes['http.url'] ||
-                  `https://${attributes['server.address'] || ''}${attributes['url.path'] || ''}`;
+        `https://${attributes['server.address'] || ''}${attributes['url.path'] || ''}`;
 
       // Check for captured bodies
       const requestBody = globalThis.__OTEL_REQUEST_BODIES?.get(url);

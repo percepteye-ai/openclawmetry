@@ -1,2 +1,18 @@
 pnpm run gateway:dev:otel
 pnpm ui:dev
+
+Instructions to run openclaw:
+
+Clone from: https://github.com/percepteye-ai/openclawmetry/tree/nitish
+
+Start Gateway: pnpm run gateway:dev:otel
+Start Web UI: pnpm ui:dev
+
+Openclaw dev config file (~/.openclaw-dev/openclaw.json) : Contains gateway auth token and slack auth
+Incase model is not configured, either run this command : pnpm openclaw --profile dev agents add anthropic 
+or use my agent profile directly (~/.openclaw-dev/agents/dev/agent/auth-profiles.json)
+
+Ensure to set this token: dev-gateway-token 
+in the Gateway Token input under the Gateway Access section in this page: http://localhost:5173/overview
+
+Access Web UI chat here at: http://localhost:5173/chat

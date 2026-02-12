@@ -24,8 +24,9 @@ function safeStringify(value, maxLength = 10000) {
 
 // Create the OTLP exporter and wrap it
 const baseExporter = new OTLPTraceExporter({
-  url: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318/v1/traces',
+  url: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://104.198.148.137:4318/v1/traces',
 });
+
 const wrappedExporter = new BodyInjectingExporter(baseExporter);
 
 const sdk = new NodeSDK({
