@@ -16,6 +16,10 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { type ChatRunEntry, createChatRunState } from "./server-chat.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
+import {
+  type InternalAgentRunContextRef,
+  handleInternalAgentRunRequest,
+} from "./server/internal-agent-run-http.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -104,6 +108,12 @@ export async function createGatewayRuntimeState(params: {
     log: params.logPlugins,
   });
 
+  const internalAgentRunContextRef: InternalAgentRunContextRef = { addChatRun: null };
+  const handleInternalAgentRun = (
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse,
+  ) => handleInternalAgentRunRequest(req, res, internalAgentRunContextRef);
+
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
   const httpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
@@ -117,6 +127,7 @@ export async function createGatewayRuntimeState(params: {
       openResponsesConfig: params.openResponsesConfig,
       handleHooksRequest,
       handlePluginRequest,
+      handleInternalAgentRun,
       resolvedAuth: params.resolvedAuth,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
     });
@@ -161,6 +172,8 @@ export async function createGatewayRuntimeState(params: {
   const addChatRun = chatRunRegistry.add;
   const removeChatRun = chatRunRegistry.remove;
   const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+
+  internalAgentRunContextRef.addChatRun = addChatRun;
 
   return {
     canvasHost,

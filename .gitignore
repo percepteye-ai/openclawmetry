@@ -69,5 +69,8 @@ IDENTITY.md
 USER.md
 .tgz
 
+# Agent Lightning trace dumps (optional; keep local)
+integrations/agent-lightning/traces/
+
 # local tooling
 .serena/

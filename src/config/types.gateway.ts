@@ -193,6 +193,25 @@ export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
 };
 
+/**
+ * Agent Lightning (AGL) integration for web chat.
+ * When bridgeUrl is set, chat.send is forwarded to the bridge; the bridge runs
+ * an AGL rollout and calls back to the gateway's internal agent-run endpoint.
+ */
+export type GatewayAglConfig = {
+  /** Base URL of the AGL bridge (e.g. http://127.0.0.1:8765). */
+  bridgeUrl?: string;
+  /** Secret for authenticating the bridge to the internal agent-run endpoint. */
+  internalAgentRunSecret?: string;
+  /**
+   * URL the bridge should use to call back to the gateway (internal agent-run).
+   * If not set, defaults to http://127.0.0.1:{gateway.port}.
+   * Set this when the bridge cannot reach 127.0.0.1 (e.g. gateway on another host,
+   * or gateway bound to a different address the bridge can use).
+   */
+  gatewayBaseUrlOverride?: string;
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -241,4 +260,6 @@ export type GatewayConfig = {
    * `x-real-ip`) to determine the client IP for local pairing and HTTP checks.
    */
   trustedProxies?: string[];
+  /** Agent Lightning bridge for web chat (optional). */
+  agl?: GatewayAglConfig;
 };

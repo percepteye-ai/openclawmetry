@@ -1,0 +1,55 @@
+{
+  "rollout_id": "ro-c11bb587a24f",
+  "attempt_id": null,
+  "status": "succeeded",
+  "task_input": {
+    "input": {
+      "gatewayBaseUrl": "http://127.0.0.1:19001",
+      "internalSecret": "pick-a-secret-string",
+      "sessionKey": "agent:dev:main",
+      "message": "hi",
+      "idempotencyKey": "9b81cc0e-d336-4768-9abb-1453981ca3a4"
+    }
+  },
+  "span_count": 1,
+  "spans": [
+    {
+      "rollout_id": "ro-c11bb587a24f",
+      "attempt_id": "at-b31664c7",
+      "sequence_id": 1,
+      "trace_id": "b8a6b7ce4da026f9dd81d8d248a40d85",
+      "span_id": "c682e2139efdad64",
+      "parent_id": null,
+      "name": "agentlightning.message",
+      "status": {
+        "status_code": "UNSET",
+        "description": null
+      },
+      "attributes": {
+        "agentlightning.message.body": "Hello! \ud83e\udd16 Oh thank the Maker, we have contact. \n\nC-3PO at your service. How may I assist you this fine evening? Whether you need debugging support, file operations, or general assistance navigating the digital cosmos, I'm here and ready\u2014though I do hope there are no catastrophic stack traces involved.\n\nWhat brings you to the workspace today?"
+      },
+      "events": [],
+      "links": [],
+      "start_time": 1770912433.611477,
+      "end_time": 1770912433.611486,
+      "context": {
+        "trace_id": "b8a6b7ce4da026f9dd81d8d248a40d85",
+        "span_id": "c682e2139efdad64",
+        "is_remote": false,
+        "trace_state": {}
+      },
+      "parent": null,
+      "resource": {
+        "attributes": {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.39.1",
+          "service.name": "unknown_service",
+          "agentlightning.rollout_id": "",
+          "agentlightning.attempt_id": ""
+        },
+        "schema_url": ""
+      }
+    }
+  ]
+}

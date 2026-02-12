@@ -109,6 +109,10 @@ export OTEL_EXPORTER_OTLP_ENDPOINT="https://otlp-gateway-prod-us-central-0.grafa
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic base64(instanceId:apiKey)"
 ```
 
+## Agent Lightning
+
+To see rollouts and spans **emitted by Agent Lightning** (AGL), use the Python integration in `integrations/agent-lightning/`. That integration uses AGL's own Runner, Tracer, and Store ([Working with Traces](https://microsoft.github.io/agent-lightning/stable/tutorials/traces/)); no custom OTEL or span processor is added in Node for AGL. Use this OTEL setup only for **Jaeger** (OpenClaw spans). For **web UI chat** through AGL, run the bridge server (`python bridge_server.py`) and set `gateway.agl.bridgeUrl` and `gateway.agl.internalAgentRunSecret` in config. See `integrations/agent-lightning/README.md`.
+
 ## Files
 
 - `otel-setup.js` - SDK initialization and auto-instrumentation

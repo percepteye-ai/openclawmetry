@@ -1,0 +1,5 @@
+# Python bytecode
+**/.venv**
+**/__pycache__/
+**/*.pyc
+**/*.pyo

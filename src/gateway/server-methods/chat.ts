@@ -444,6 +444,97 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
+      const bridgeUrl = cfg.gateway?.agl?.bridgeUrl?.trim();
+      if (bridgeUrl) {
+        context.logGateway.info(`chat.send forwarding to AGL bridge: ${bridgeUrl}`);
+        const base = bridgeUrl.replace(/\/+$/, "");
+        const gatewayBaseUrl =
+          cfg.gateway?.agl?.gatewayBaseUrlOverride?.trim() ||
+          `http://127.0.0.1:${cfg.gateway?.port ?? 18789}`;
+        const internalSecret = cfg.gateway?.agl?.internalAgentRunSecret ?? "";
+        fetch(`${base}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionKey: p.sessionKey,
+            message: parsedMessage,
+            attachments: normalizedAttachments,
+            idempotencyKey: clientRunId,
+            gatewayBaseUrl,
+            internalSecret,
+          }),
+          signal: abortController.signal,
+        })
+          .then(async (res) => {
+            const data = (await res.json().catch(() => ({}))) as {
+              ok?: boolean;
+              responseText?: string;
+              error?: string;
+            };
+            if (!res.ok) {
+              const errMsg = data?.error ?? res.statusText;
+              broadcastChatError({
+                context,
+                runId: clientRunId,
+                sessionKey: p.sessionKey,
+                errorMessage: errMsg,
+              });
+              context.dedupe.set(`chat:${clientRunId}`, {
+                ts: Date.now(),
+                ok: false,
+                payload: {
+                  runId: clientRunId,
+                  status: "error" as const,
+                  summary: errMsg,
+                },
+                error: errorShape(ErrorCodes.UNAVAILABLE, errMsg),
+              });
+              return;
+            }
+            const responseText = data?.responseText ?? "";
+            const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
+              p.sessionKey,
+            );
+            const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+            appendAssistantTranscriptMessage({
+              message: responseText,
+              sessionId,
+              storePath: latestStorePath,
+              sessionFile: latestEntry?.sessionFile,
+              createIfMissing: true,
+            });
+            // Final was already broadcast by the internal agent-run when the bridge called it.
+            context.dedupe.set(`chat:${clientRunId}`, {
+              ts: Date.now(),
+              ok: true,
+              payload: { runId: clientRunId, status: "ok" as const },
+            });
+          })
+          .catch((err) => {
+            const errMessage = err instanceof Error ? err.message : String(err);
+            broadcastChatError({
+              context,
+              runId: clientRunId,
+              sessionKey: p.sessionKey,
+              errorMessage: errMessage,
+            });
+            context.dedupe.set(`chat:${clientRunId}`, {
+              ts: Date.now(),
+              ok: false,
+              payload: {
+                runId: clientRunId,
+                status: "error" as const,
+                summary: errMessage,
+              },
+              error: errorShape(ErrorCodes.UNAVAILABLE, errMessage),
+            });
+          })
+          .finally(() => {
+            context.chatAbortControllers.delete(clientRunId);
+          });
+        return;
+      }
+
       const trimmedMessage = parsedMessage.trim();
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),

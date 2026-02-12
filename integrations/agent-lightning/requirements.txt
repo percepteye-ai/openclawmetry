@@ -1,0 +1,4 @@
+# Agent Lightning integration: use AGL's tracer/runner/store to run OpenClaw.
+# See: https://microsoft.github.io/agent-lightning/stable/tutorials/traces/
+agentlightning>=0.3.0
+aiohttp>=3.9.0

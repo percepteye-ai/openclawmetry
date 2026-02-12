@@ -333,6 +333,14 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         trustedProxies: z.array(z.string()).optional(),
+        agl: z
+          .object({
+            bridgeUrl: z.string().url().optional(),
+            internalAgentRunSecret: z.string().optional(),
+            gatewayBaseUrlOverride: z.string().url().optional(),
+          })
+          .strict()
+          .optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),

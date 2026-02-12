@@ -29,6 +29,7 @@ import {
 import { applyHookMappings } from "./hooks-mapping.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { handleInternalAgentRunRequest } from "./server/internal-agent-run-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -211,6 +212,8 @@ export function createGatewayHttpServer(opts: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: HooksRequestHandler;
+  /** Optional handler for AGL bridge internal agent-run endpoint. */
+  handleInternalAgentRun?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   resolvedAuth: import("./auth.js").ResolvedGatewayAuth;
   tlsOptions?: TlsOptions;
 }): HttpServer {
@@ -223,6 +226,7 @@ export function createGatewayHttpServer(opts: {
     openResponsesConfig,
     handleHooksRequest,
     handlePluginRequest,
+    handleInternalAgentRun,
     resolvedAuth,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
@@ -242,6 +246,9 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      if (handleInternalAgentRun && (await handleInternalAgentRun(req, res))) {
+        return;
+      }
       if (await handleHooksRequest(req, res)) {
         return;
       }
