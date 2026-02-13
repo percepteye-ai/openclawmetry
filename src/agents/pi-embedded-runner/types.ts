@@ -18,6 +18,8 @@ export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
+  /** Full system prompt string passed to the agent (for traces/export). */
+  systemPrompt?: string;
   systemPromptReport?: SessionSystemPromptReport;
   error?: {
     kind: "context_overflow" | "compaction_failure" | "role_ordering" | "image_size";

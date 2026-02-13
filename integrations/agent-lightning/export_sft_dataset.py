@@ -17,6 +17,7 @@ Usage (from repo root or this directory, ideally inside the venv):
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -25,6 +26,11 @@ from agentlightning.adapter.messages import TraceToMessages
 ROOT_DIR = Path(__file__).resolve().parent
 TRACES_DIR = ROOT_DIR / "traces"
 OUTPUT_PATH = ROOT_DIR / "sft_dataset.jsonl"
+SYSTEM_PROMPT_PATH = ROOT_DIR / "system_prompt.txt"
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a personal assistant running inside OpenClaw with access to tools. "
+    "Follow the user's instructions."
+)
 
 
 def _load_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -32,6 +38,14 @@ def _load_json(path: Path) -> Optional[Dict[str, Any]]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _get_system_prompt_content() -> str:
+    """System prompt to prepend when traces have none. From file or default."""
+    path = Path(os.environ.get("OPENCLAW_SYSTEM_PROMPT_PATH", "")).expanduser() or SYSTEM_PROMPT_PATH
+    if path.is_file():
+        return path.read_text(encoding="utf-8").strip() or DEFAULT_SYSTEM_PROMPT
+    return DEFAULT_SYSTEM_PROMPT
 
 
 def _normalize_attributes_for_adapter(attrs: Dict[str, Any]) -> Dict[str, Any]:
@@ -108,6 +122,9 @@ def main() -> None:
         messages = entry.get("messages")
         if not messages:
             continue
+        if messages[0].get("role") != "system":
+            system_content = _get_system_prompt_content()
+            messages = [{"role": "system", "content": system_content}] + list(messages)
         row: Dict[str, Any] = {"messages": messages}
         if entry.get("tools") is not None:
             row["tools"] = entry["tools"]

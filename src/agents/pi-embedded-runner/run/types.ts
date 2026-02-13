@@ -90,6 +90,8 @@ export type EmbeddedRunAttemptResult = {
   timedOut: boolean;
   promptError: unknown;
   sessionIdUsed: string;
+  /** Full system prompt string passed to the agent (for traces/export). */
+  systemPrompt?: string;
   systemPromptReport?: SessionSystemPromptReport;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];

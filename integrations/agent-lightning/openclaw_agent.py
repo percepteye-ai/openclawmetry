@@ -108,11 +108,11 @@ def _call_gateway_agent_run(
     """
     POST to the gateway internal /_openclaw/internal/agent-run endpoint.
 
-    Returns (response_text, messages) on success. messages is the conversation
-    for this call (role + content) when the gateway includes it.
+    Returns (response_text, messages) on success. messages includes the
+    Pi-built system prompt as the first message when the gateway provides it.
     """
     url = gateway_base_url.rstrip("/") + "/_openclaw/internal/agent-run"
-    payload = {
+    payload: dict[str, Any] = {
         "sessionKey": session_key,
         "message": message,
         "mode": "cli",

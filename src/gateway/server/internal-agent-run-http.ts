@@ -132,6 +132,7 @@ export async function handleInternalAgentRunRequest(
     identityName: resolveIdentityName(sessionCfg, agentId),
   };
   const finalReplyParts: string[] = [];
+  let capturedSystemPrompt: string | undefined;
   const dispatcher = createReplyDispatcher({
     responsePrefix: resolveEffectiveMessagesConfig(sessionCfg, agentId).responsePrefix,
     responsePrefixContextProvider: () => prefixContext,
@@ -156,6 +157,9 @@ export async function handleInternalAgentRunRequest(
           prefixContext.model = extractShortModelName(ctx.model);
           prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
           prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+        },
+        onRunMeta: (meta) => {
+          if (meta.systemPrompt != null) capturedSystemPrompt = meta.systemPrompt;
         },
       },
     });
@@ -184,6 +188,9 @@ export async function handleInternalAgentRunRequest(
     );
     const delta = messagesAfterRun.slice(messageCountBeforeRun);
     messages = transcriptToOpenAIMessages(delta);
+    if (capturedSystemPrompt && messages.length > 0 && messages[0]?.role !== "system") {
+      messages = [{ role: "system", content: capturedSystemPrompt }, ...messages];
+    }
   } catch {
     /* non-fatal */
   }

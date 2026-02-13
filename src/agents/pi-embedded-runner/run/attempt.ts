@@ -896,6 +896,7 @@ export async function runEmbeddedAttempt(
         timedOut,
         promptError,
         sessionIdUsed,
+        systemPrompt: appendPrompt,
         systemPromptReport,
         messagesSnapshot,
         assistantTexts,

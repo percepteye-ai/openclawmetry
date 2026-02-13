@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-Run many AGL rollouts from a list of prompts via the gateway and write a trace file for each.
+Run many AGL rollouts from a prompts file via the gateway in parallel; write a trace file for each.
 
-Uses openclaw_agent_gateway so the agent runs inside the gateway with the same
-session and tools as the web UI. Put one prompt per line in prompts.txt, run
-this script, then export_sft_dataset.py to build sft_dataset.jsonl.
+Reads one prompt per line from a txt file, runs each through openclaw_agent_gateway in parallel
+(to save time), then writes rollout traces. Run export_sft_dataset.py afterward to build sft_dataset.jsonl.
 
 Required env (start the gateway first):
   GATEWAY_BASE_URL   e.g. http://127.0.0.1:19001
   INTERNAL_SECRET    same as gateway.agl.internalAgentRunSecret
   SESSION_KEY        e.g. agent:dev:main
 
+Optional env:
+  MAX_CONCURRENT     max parallel rollouts (default 4)
+
 Usage:
   cd integrations/agent-lightning
   source .venv/bin/activate
-  export GATEWAY_BASE_URL=http://127.0.0.1:19001
-  export INTERNAL_SECRET=pick-a-secret-string
-  export SESSION_KEY=agent:dev:main
+  export GATEWAY_BASE_URL=http://127.0.0.1:19001 INTERNAL_SECRET=... SESSION_KEY=agent:dev:main
   python collect_traces.py prompts.txt
 """
 
@@ -54,6 +54,11 @@ async def main() -> None:
         print("Example: export GATEWAY_BASE_URL=http://127.0.0.1:19001 INTERNAL_SECRET=pick-a-secret-string SESSION_KEY=agent:dev:main", file=sys.stderr)
         sys.exit(1)
 
+    try:
+        max_concurrent = max(1, int(os.environ.get("MAX_CONCURRENT", "4")))
+    except ValueError:
+        max_concurrent = 4
+
     prompts_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PROMPTS_FILE
     if not prompts_path.exists():
         print(f"Prompts file not found: {prompts_path}", file=sys.stderr)
@@ -81,48 +86,61 @@ async def main() -> None:
     runner.init(openclaw_agent_gateway)
     runner.init_worker(0, store=store)
 
-    TRACES_DIR.mkdir(parents=True, exist_ok=True)
-    written = 0
-    try:
-        for i, message in enumerate(prompts):
-            # Pass gateway payload at top level so it survives AGL prompt_template rendering
-            # (which may replace task.input with a string). Agent reads from task.input first, then task.
-            task_input = {
-                "input": message,
-                "gatewayBaseUrl": gateway_base_url,
-                "internalSecret": internal_secret,
-                "sessionKey": session_key,
-                "message": message,
-                "idempotencyKey": str(uuid.uuid4()),
-            }
-            print(f"[{i+1}/{len(prompts)}] {message[:60]}{'...' if len(message) > 60 else ''}")
+    sem = asyncio.Semaphore(max_concurrent)
+
+    async def run_one(i: int, message: str) -> tuple[int, object | None, list, dict | None]:
+        task_input = {
+            "input": message,
+            "gatewayBaseUrl": gateway_base_url,
+            "internalSecret": internal_secret,
+            "sessionKey": session_key,
+            "message": message,
+            "idempotencyKey": str(uuid.uuid4()),
+        }
+        async with sem:
             try:
                 rollout = await runner.step(task_input, mode="val")
             except Exception as e:
-                print(f"  Rollout failed: {e}", file=sys.stderr)
-                continue
-            rollout_id = getattr(rollout, "rollout_id", None) or (
-                rollout.get("rollout_id") if isinstance(rollout, dict) else None
-            )
-            if not rollout_id:
-                print("  No rollout_id, skipping trace write.", file=sys.stderr)
-                continue
-            spans = await store.query_spans(rollout_id)
-            timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-            trace_file = TRACES_DIR / f"rollout_{rollout_id}_{timestamp}.json"
-            payload = {
-                "rollout_id": rollout_id,
-                "attempt_id": getattr(rollout, "attempt_id", None) if not isinstance(rollout, dict) else rollout.get("attempt_id"),
-                "status": getattr(rollout, "status", None) if not isinstance(rollout, dict) else rollout.get("status"),
-                "task_input": task_input,
-                "span_count": len(spans),
-                "spans": [_span_to_dict(s) for s in spans],
-            }
-            trace_file.write_text(json.dumps(payload, indent=2, default=str))
-            written += 1
+                print(f"[{i+1}/{len(prompts)}] failed: {e}", file=sys.stderr)
+                return (i, None, [], None)
+        rollout_id = getattr(rollout, "rollout_id", None) or (
+            rollout.get("rollout_id") if isinstance(rollout, dict) else None
+        )
+        if not rollout_id:
+            print(f"[{i+1}/{len(prompts)}] no rollout_id", file=sys.stderr)
+            return (i, None, [], None)
+        spans = await store.query_spans(rollout_id)
+        return (i, rollout, spans, task_input)
+
+    TRACES_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        results = await asyncio.gather(
+            *[run_one(i, msg) for i, msg in enumerate(prompts)],
+            return_exceptions=False,
+        )
     finally:
         runner.teardown_worker(0)
         runner.teardown()
+
+    written = 0
+    for i, rollout, spans, task_input in results:
+        if rollout is None or task_input is None:
+            continue
+        rollout_id = getattr(rollout, "rollout_id", None) or (
+            rollout.get("rollout_id") if isinstance(rollout, dict) else None
+        )
+        timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        trace_file = TRACES_DIR / f"rollout_{rollout_id}_{timestamp}.json"
+        payload = {
+            "rollout_id": rollout_id,
+            "attempt_id": getattr(rollout, "attempt_id", None) if not isinstance(rollout, dict) else rollout.get("attempt_id"),
+            "status": getattr(rollout, "status", None) if not isinstance(rollout, dict) else rollout.get("status"),
+            "task_input": task_input,
+            "span_count": len(spans),
+            "spans": [_span_to_dict(s) for s in spans],
+        }
+        trace_file.write_text(json.dumps(payload, indent=2, default=str))
+        written += 1
 
     print(f"Wrote {written} trace(s) to {TRACES_DIR}. Run: python export_sft_dataset.py")
 

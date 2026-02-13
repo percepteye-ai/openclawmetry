@@ -442,6 +442,9 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      if (runResult.meta?.systemPrompt != null) {
+        params.opts?.onRunMeta?.({ systemPrompt: runResult.meta.systemPrompt });
+      }
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
